@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#05061a" />
-    <meta name="description" content="Bend gravity and slingshot a probe through planets and black holes to reach the beacon." />
+    <meta name="description" content="Bend gravity and slingshot a probe through planets, black holes and wormholes. Daily challenges and a level editor with shareable links." />
     <title>Orbit Slingshot</title>
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -15,6 +15,9 @@
     <canvas id="game"></canvas>
 
     <section id="title" class="screen center">
+      <button id="btn-settings" class="icon-btn corner" aria-label="Settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>
+      </button>
       <div class="title-card">
         <p class="eyebrow">A gravity puzzle</p>
         <h1>Orbit<br /><span>Slingshot</span></h1>
@@ -23,7 +26,21 @@
           <button id="btn-play" class="btn primary">Play</button>
           <button id="btn-levels" class="btn ghost">Levels</button>
         </div>
-        <p class="keys">Drag to aim &middot; release to launch &middot; <kbd>R</kbd> restart &middot; <kbd>Space</kbd> recall</p>
+        <div class="mode-cards">
+          <button id="btn-daily" class="mode-card">
+            <span class="mode-icon">
+              <svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="3" /><path d="M8 3v4M16 3v4M3.5 10h17" /><path d="M12 13.2l.9 1.8 2 .3-1.4 1.4.3 2-1.8-1-1.8 1 .3-2-1.4-1.4 2-.3z" /></svg>
+            </span>
+            <span><b>Daily Challenge</b><small id="daily-meta">New every day</small></span>
+          </button>
+          <button id="btn-create" class="mode-card">
+            <span class="mode-icon">
+              <svg viewBox="0 0 24 24"><path d="M4 20l4-1 11-11-3-3L5 16z" /><path d="M14 6l3 3" /></svg>
+            </span>
+            <span><b>Level Editor</b><small>Build &amp; share levels</small></span>
+          </button>
+        </div>
+        <p class="keys">Drag to aim &middot; release to launch &middot; <kbd>H</kbd> hint &middot; <kbd>F</kbd> fast-forward &middot; <kbd>R</kbd> restart</p>
       </div>
     </section>
 
@@ -34,16 +51,39 @@
             <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" /></svg>
           </button>
           <h2>Select level</h2>
+          <span id="star-total" class="star-total"></span>
         </div>
         <div id="level-grid"></div>
+      </div>
+    </section>
+
+    <section id="settings" class="screen center">
+      <div class="panel settings-panel">
+        <div class="panel-head">
+          <button id="btn-settings-close" class="icon-btn" aria-label="Back">
+            <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" /></svg>
+          </button>
+          <h2>Settings</h2>
+        </div>
+        <div id="settings-list"></div>
+        <button id="btn-reset" class="btn ghost danger-btn">Reset progress</button>
       </div>
     </section>
 
     <section id="hud" class="screen">
       <div class="hud-bar">
         <div id="level-label" class="level-label"></div>
-        <div class="shots">Shots <span id="shots">0</span></div>
+        <div class="hud-stats">
+          <div class="shots">Shots <span id="shots">0</span></div>
+          <div id="dust" class="dust-count" hidden></div>
+        </div>
         <div class="hud-actions">
+          <button id="btn-hint" class="icon-btn" aria-label="Hint">
+            <svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4" /><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z" /></svg>
+          </button>
+          <button id="btn-ff" class="icon-btn" aria-label="Fast-forward">
+            <svg viewBox="0 0 24 24"><path d="M4 6l8 6-8 6zM12 6l8 6-8 6z" /></svg>
+          </button>
           <button id="btn-restart" class="icon-btn" aria-label="Restart level">
             <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7" /><path d="M4 4v4.5h4.5" /></svg>
           </button>
@@ -51,12 +91,40 @@
             <svg class="on" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z" /><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" /></svg>
             <svg class="off" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z" /><path d="M17 9l5 6M22 9l-5 6" /></svg>
           </button>
-          <button id="btn-menu" class="icon-btn" aria-label="Levels">
-            <svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1.5" /><rect x="14" y="4" width="6" height="6" rx="1.5" /><rect x="4" y="14" width="6" height="6" rx="1.5" /><rect x="14" y="14" width="6" height="6" rx="1.5" /></svg>
+          <button id="btn-menu" class="icon-btn" aria-label="Menu">
+            <svg class="grid-icon" viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1.5" /><rect x="14" y="4" width="6" height="6" rx="1.5" /><rect x="4" y="14" width="6" height="6" rx="1.5" /><rect x="14" y="14" width="6" height="6" rx="1.5" /></svg>
+            <svg class="edit-icon" viewBox="0 0 24 24"><path d="M4 20l4-1 11-11-3-3L5 16z" /><path d="M14 6l3 3" /></svg>
           </button>
         </div>
       </div>
       <p id="hint" class="hint"></p>
+    </section>
+
+    <section id="editor" class="screen">
+      <div class="ed-top">
+        <button id="ed-exit" class="icon-btn" aria-label="Exit editor">
+          <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" /></svg>
+        </button>
+        <input id="ed-name" maxlength="40" placeholder="Level name" aria-label="Level name" spellcheck="false" />
+        <div class="ed-top-actions">
+          <button id="ed-clear" class="btn ghost sm">New</button>
+          <button id="ed-check" class="btn ghost sm">Check</button>
+          <button id="ed-share" class="btn ghost sm">Share</button>
+          <button id="ed-test" class="btn primary sm">Test</button>
+        </div>
+      </div>
+      <div id="ed-inspector" class="ed-inspector" hidden></div>
+      <div class="ed-bottom">
+        <div id="ed-tools" class="ed-tools">
+          <button data-add="planet"><i class="dot planet"></i>Planet</button>
+          <button data-add="moon"><i class="dot moon"></i>Moon</button>
+          <button data-add="blackhole"><i class="dot hole"></i>Black hole</button>
+          <button data-add="repulsor"><i class="dot repulsor"></i>Repulsor</button>
+          <button data-add="wormhole"><i class="dot worm"></i>Wormhole</button>
+          <button data-add="dust"><i class="dot dust"></i>Stardust</button>
+        </div>
+        <p class="ed-tip">Drag to move &middot; scroll or use the panel to resize &middot; <kbd>Del</kbd> removes</p>
+      </div>
     </section>
 
     <section id="win" class="screen center">
@@ -65,11 +133,14 @@
         <h2 id="win-title">Probe delivered</h2>
         <div id="win-stars" class="win-stars"></div>
         <p id="win-shots" class="win-shots"></p>
-        <div class="actions">
-          <button id="btn-next" class="btn primary">Next level</button>
-          <button id="btn-retry" class="btn ghost">Retry</button>
-          <button id="btn-win-levels" class="btn ghost">Levels</button>
-        </div>
+        <div id="win-actions" class="actions"></div>
+      </div>
+    </section>
+
+    <section id="loading" class="screen center">
+      <div class="loading">
+        <span class="orbit-spinner"><i></i></span>
+        <p>Charting today’s sky…</p>
       </div>
     </section>
 

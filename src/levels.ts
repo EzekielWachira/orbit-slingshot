@@ -96,6 +96,94 @@ export const LEVELS: LevelDef[] = [
       { x: 1250, y: 260, r: 60, hue: 15, rings: true },
     ],
   },
+  {
+    name: 'Stardust',
+    hint: 'Fly through the stardust for a perfect score. It resets every shot.',
+    launch: { x: 180, y: 620 },
+    target: { x: 1420, y: 620, r: 38 },
+    bodies: [{ x: 800, y: 600, r: 75, hue: 210 }],
+    dust: [
+      { x: 517, y: 512 },
+      { x: 850, y: 462 },
+      { x: 1166, y: 534 },
+    ],
+  },
+  {
+    name: 'Wormhole',
+    hint: 'Wormholes link two points in space. Dive into one, fly out of the other.',
+    launch: { x: 160, y: 720 },
+    target: { x: 1450, y: 180, r: 36 },
+    bodies: [
+      { x: 800, y: 130, r: 125, hue: 0 },
+      { x: 800, y: 450, r: 125, hue: 30 },
+      { x: 800, y: 770, r: 125, hue: 340 },
+    ],
+    wormholes: [{ a: { x: 460, y: 620 }, b: { x: 1140, y: 300 }, r: 30 }],
+    dust: [{ x: 1290, y: 240 }],
+  },
+  {
+    name: 'Repulsor',
+    hint: 'Repulsors push instead of pull. Let it nudge you home.',
+    launch: { x: 180, y: 700 },
+    target: { x: 1420, y: 700, r: 44 },
+    bodies: [
+      { x: 800, y: 700, r: 40, kind: 'repulsor', hue: 200 },
+      { x: 800, y: 230, r: 60, hue: 25 },
+    ],
+    dust: [
+      { x: 500, y: 161 },
+      { x: 1248, y: 357 },
+    ],
+  },
+  {
+    name: 'Hall of Mirrors',
+    hint: 'Each pair of wormholes shares a colour.',
+    launch: { x: 160, y: 450 },
+    target: { x: 1450, y: 450, r: 36 },
+    bodies: [
+      { x: 560, y: 450, r: 90, hue: 260 },
+      { x: 1040, y: 450, r: 90, hue: 180, rings: true },
+    ],
+    wormholes: [
+      { a: { x: 400, y: 160 }, b: { x: 800, y: 740 }, r: 28 },
+      { a: { x: 800, y: 160 }, b: { x: 1200, y: 740 }, r: 28 },
+    ],
+    dust: [
+      { x: 800, y: 450 },
+      { x: 1290, y: 600 },
+    ],
+  },
+  {
+    name: 'Push & Pull',
+    hint: 'A black hole and a repulsor, fighting over your probe.',
+    launch: { x: 160, y: 450 },
+    target: { x: 1440, y: 450, r: 36 },
+    bodies: [
+      { x: 820, y: 660, r: 16, gm: 2.6e7, kind: 'blackhole', hue: 20 },
+      { x: 820, y: 240, r: 45, gm: 1.2e7, kind: 'repulsor', hue: 190 },
+    ],
+    dust: [
+      { x: 819, y: 397 },
+      { x: 1315, y: 507 },
+    ],
+  },
+  {
+    name: 'Singularity',
+    hint: 'The final test. Everything bends here.',
+    launch: { x: 140, y: 780 },
+    target: { x: 1470, y: 120, r: 34 },
+    bodies: [
+      { x: 800, y: 450, r: 18, gm: 3e7, kind: 'blackhole', hue: 285 },
+      { r: 24, hue: 45, orbit: { cx: 800, cy: 450, radius: 230, period: 9, phase: 0 } },
+      { x: 400, y: 330, r: 40, gm: 9e6, kind: 'repulsor', hue: 170 },
+      { x: 1220, y: 640, r: 70, hue: 350, rings: true },
+    ],
+    wormholes: [{ a: { x: 330, y: 620 }, b: { x: 1150, y: 200 }, r: 26 }],
+    dust: [
+      { x: 232, y: 702 },
+      { x: 1260, y: 142 },
+    ],
+  },
 ];
 
 /** Backdrop for the title screen: a probe circling a ringed giant. */

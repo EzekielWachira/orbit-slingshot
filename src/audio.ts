@@ -90,6 +90,23 @@ export const sfx = {
       tone(f * 2, t + i * 0.09, 0.5, 'triangle', 0.04);
     });
   },
+  warp() {
+    const ac = ensure();
+    if (!ac) return;
+    const t = ac.currentTime;
+    tone(900, t, 0.35, 'sine', 0.14, 120);
+    tone(140, t + 0.12, 0.35, 'sine', 0.12, 1100);
+    noise(t, 0.3, 0.12, 6000, 500);
+  },
+  /** Rising pitch as you collect more in one flight. */
+  dust(n: number) {
+    const ac = ensure();
+    if (!ac) return;
+    const t = ac.currentTime;
+    const f = 880 * Math.pow(2, (n - 1) * (4 / 12));
+    tone(f, t, 0.25, 'triangle', 0.12);
+    tone(f * 1.5, t + 0.05, 0.3, 'sine', 0.08);
+  },
   click() {
     const ac = ensure();
     if (!ac) return;
