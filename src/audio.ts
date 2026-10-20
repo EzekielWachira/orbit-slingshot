@@ -1,0 +1,105 @@
+// Tiny synthesized sound effects — no audio files to load.
+
+let ctx: AudioContext | null = null;
+let master: GainNode | null = null;
+let muted = false;
+
+function ensure(): AudioContext | null {
+  if (muted) return null;
+  if (!ctx) {
+    try {
+      ctx = new AudioContext();
+      master = ctx.createGain();
+      master.gain.value = 0.5;
+      master.connect(ctx.destination);
+    } catch {
+      return null;
+    }
+  }
+  if (ctx.state === 'suspended') void ctx.resume();
+  return ctx;
+}
+
+function noiseBuffer(ac: AudioContext, seconds: number): AudioBuffer {
+  const buf = ac.createBuffer(1, Math.floor(ac.sampleRate * seconds), ac.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+  return buf;
+}
+
+function tone(freq: number, start: number, dur: number, type: OscillatorType, vol: number, endFreq?: number) {
+  const ac = ctx!;
+  const osc = ac.createOscillator();
+  const g = ac.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, start);
+  if (endFreq) osc.frequency.exponentialRampToValueAtTime(endFreq, start + dur);
+  g.gain.setValueAtTime(0.0001, start);
+  g.gain.exponentialRampToValueAtTime(vol, start + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+  osc.connect(g).connect(master!);
+  osc.start(start);
+  osc.stop(start + dur + 0.05);
+}
+
+function noise(start: number, dur: number, vol: number, fromHz: number, toHz: number) {
+  const ac = ctx!;
+  const src = ac.createBufferSource();
+  src.buffer = noiseBuffer(ac, dur);
+  const filter = ac.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.setValueAtTime(fromHz, start);
+  filter.frequency.exponentialRampToValueAtTime(toHz, start + dur);
+  const g = ac.createGain();
+  g.gain.setValueAtTime(vol, start);
+  g.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+  src.connect(filter).connect(g).connect(master!);
+  src.start(start);
+}
+
+export const sfx = {
+  unlock() {
+    ensure();
+  },
+  launch(power: number) {
+    const ac = ensure();
+    if (!ac) return;
+    const t = ac.currentTime;
+    noise(t, 0.35, 0.25 + power * 0.25, 4000, 300);
+    tone(180, t, 0.3, 'sine', 0.25, 520 + power * 400);
+  },
+  crash() {
+    const ac = ensure();
+    if (!ac) return;
+    const t = ac.currentTime;
+    noise(t, 0.8, 0.6, 1800, 60);
+    tone(120, t, 0.5, 'triangle', 0.3, 40);
+  },
+  lost() {
+    const ac = ensure();
+    if (!ac) return;
+    const t = ac.currentTime;
+    tone(440, t, 0.6, 'sine', 0.15, 110);
+  },
+  win() {
+    const ac = ensure();
+    if (!ac) return;
+    const t = ac.currentTime;
+    [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => {
+      tone(f, t + i * 0.09, 0.9, 'sine', 0.18);
+      tone(f * 2, t + i * 0.09, 0.5, 'triangle', 0.04);
+    });
+  },
+  click() {
+    const ac = ensure();
+    if (!ac) return;
+    tone(880, ac.currentTime, 0.06, 'square', 0.04, 660);
+  },
+  setMuted(m: boolean) {
+    muted = m;
+    if (master && ctx) master.gain.setTargetAtTime(m ? 0 : 0.5, ctx.currentTime, 0.02);
+  },
+  get muted() {
+    return muted;
+  },
+};
