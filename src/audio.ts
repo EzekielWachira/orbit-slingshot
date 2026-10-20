@@ -83,8 +83,11 @@ export const sfx = {
     const ac = ensure();
     if (!ac) return;
     const t = ac.currentTime;
-    noise(t, 0.8, 0.6, 1800, 60);
-    tone(120, t, 0.5, 'triangle', 0.3, 40);
+    // Boom: a falling sub thump under a long filtered rumble, then a few crackles.
+    noise(t, 1.3, 0.75, 2600, 50);
+    tone(140, t, 0.9, 'sine', 0.45, 32);
+    tone(90, t, 0.6, 'triangle', 0.25, 40);
+    for (let i = 0; i < 5; i++) noise(t + 0.08 + Math.random() * 0.45, 0.06, 0.18, 5000, 1200);
   },
   lost() {
     const ac = ensure();

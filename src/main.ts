@@ -770,7 +770,7 @@ const SETTING_LABELS: [keyof Settings, string, string][] = [
   ['assist', 'Long aim preview', 'Shows nearly three times more of your path while aiming'],
   ['bestRoute', 'Show best route', 'A faint gold line of your best winning shot'],
   ['grid', 'Gravity grid', 'The warped space-time grid behind everything'],
-  ['shake', 'Screen shake', 'Shake the camera on crashes'],
+  ['shake', 'Screen shake', 'Shake and flash the screen on crashes'],
   ['music', 'Music', 'A generative soundtrack that builds as you near the beacon'],
 ];
 

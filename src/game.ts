@@ -61,6 +61,9 @@ export interface Settings {
   music: boolean;
 }
 
+/** glow: soft additive blob · spark: additive streak along its velocity · smoke: dark puff that swells as it fades */
+type ParticleKind = 'glow' | 'spark' | 'smoke';
+
 interface Particle {
   x: number;
   y: number;
@@ -71,6 +74,17 @@ interface Particle {
   size: number;
   hue: number;
   light: number;
+  kind: ParticleKind;
+  /** Velocity damping per second. */
+  drag: number;
+}
+
+/** A scorch glow on a body's surface, stored relative to the body so it follows moving moons. */
+interface Impact {
+  body: number;
+  ox: number;
+  oy: number;
+  age: number;
 }
 
 interface Wave {
@@ -142,6 +156,9 @@ export class Game {
   private ghosts: PathPt[][] = [];
   private particles: Particle[] = [];
   private waves: Wave[] = [];
+  private impacts: Impact[] = [];
+  /** Full-screen crash flash, 1 fading to 0. */
+  private flash = 0;
   private pos: Vec[] = [];
   private preview: PathPt[] = [];
   private previewOutcome: Outcome = 'flying';
@@ -205,6 +222,8 @@ export class Game {
     this.ghosts = [];
     this.particles = [];
     this.waves = [];
+    this.impacts = [];
+    this.flash = 0;
     this.hint = null;
     this.hinted = false;
     this.ff = false;
@@ -598,9 +617,10 @@ export class Game {
     const quiet = !this.live;
 
     if (out === 'crash') {
-      const hitHole = this.nearestBody()?.kind === 'blackhole';
-      this.explode(this.probe.x, this.probe.y, hitHole);
-      this.shake = !this.settings.shake ? 0 : hitHole ? 6 : 16;
+      const hit = this.nearestBody();
+      const hitHole = hit?.body.kind === 'blackhole';
+      this.explode(this.probe.x, this.probe.y, hit);
+      this.shake = !this.settings.shake ? 0 : hitHole ? 8 : 24;
       this.resolveTimer = 1.1;
       if (!quiet) {
         sfx.crash();
@@ -615,40 +635,98 @@ export class Game {
     }
   }
 
-  private nearestBody(): BodyDef | undefined {
-    let best: BodyDef | undefined;
+  private nearestBody(): { body: BodyDef; index: number } | undefined {
+    let best: { body: BodyDef; index: number } | undefined;
     let bestD = Infinity;
     this.level.bodies.forEach((b, i) => {
       const d = Math.hypot(this.pos[i].x - this.probe.x, this.pos[i].y - this.probe.y) - b.r;
       if (d < bestD) {
         bestD = d;
-        best = b;
+        best = { body: b, index: i };
       }
     });
     return best;
   }
 
-  private spawn(x: number, y: number, vx: number, vy: number, life: number, size: number, hue: number, light: number) {
-    if (this.particles.length > 900) return;
-    this.particles.push({ x, y, vx, vy, life, max: life, size, hue, light });
+  private spawn(
+    x: number,
+    y: number,
+    vx: number,
+    vy: number,
+    life: number,
+    size: number,
+    hue: number,
+    light: number,
+    kind: ParticleKind = 'glow',
+    drag = 1.8,
+  ) {
+    if (this.particles.length > 1400) return;
+    this.particles.push({ x, y, vx, vy, life, max: life, size, hue, light, kind, drag });
   }
 
-  private explode(x: number, y: number, implode: boolean) {
-    if (implode) {
-      for (let i = 0; i < 50; i++) {
+  private explode(x: number, y: number, hit?: { body: BodyDef; index: number }) {
+    // A moment of hit-stop sells the impact; the time scale eases back on its own.
+    this.timeScale = 0.25;
+    const bp = hit ? this.pos[hit.index] : null;
+
+    if (hit?.body.kind === 'blackhole') {
+      // Spaghettified: debris spirals inward instead of blasting out.
+      const hue = hit.body.hue;
+      for (let i = 0; i < 70; i++) {
         const a = rand(0, Math.PI * 2);
-        const d = rand(30, 90);
-        this.spawn(x + Math.cos(a) * d, y + Math.sin(a) * d, -Math.cos(a) * d * 3, -Math.sin(a) * d * 3, rand(0.25, 0.4), rand(1, 2.5), rand(20, 50), 70);
+        const d = rand(30, 110);
+        const px = bp!.x + Math.cos(a) * d;
+        const py = bp!.y + Math.sin(a) * d;
+        const swirl = d * 4;
+        const vx = -Math.cos(a) * d * 2.6 - Math.sin(a) * swirl;
+        const vy = -Math.sin(a) * d * 2.6 + Math.cos(a) * swirl;
+        this.spawn(px, py, vx, vy, rand(0.3, 0.55), rand(1, 2.2), hue + rand(-20, 20), 75, 'spark', 0.5);
       }
+      this.waves.push({ x: bp!.x, y: bp!.y, age: 0, max: 0.5, size: 90, hue });
+      this.flash = 0.45;
       return;
     }
-    this.spawn(x, y, 0, 0, 0.35, 46, 40, 85);
-    for (let i = 0; i < 90; i++) {
-      const a = rand(0, Math.PI * 2);
-      const s = rand(40, 420);
-      this.spawn(x, y, Math.cos(a) * s, Math.sin(a) * s, rand(0.4, 1.3), rand(1.2, 4), rand(10, 50), rand(55, 75));
+
+    // Blast away from the surface that was hit.
+    let out = rand(0, Math.PI * 2);
+    let cone = Math.PI;
+    if (hit && bp) {
+      out = Math.atan2(y - bp.y, x - bp.x);
+      cone = 1.5;
+      this.impacts.push({ body: hit.index, ox: x - bp.x, oy: y - bp.y, age: 0 });
     }
-    this.waves.push({ x, y, age: 0, max: 0.6, size: 110, hue: 30 });
+    const fireHue = hit?.body.kind === 'repulsor' ? 225 : 28;
+    const dir = (spread: number) => out + rand(-spread, spread);
+
+    // White-hot core.
+    this.spawn(x, y, 0, 0, 0.26, 120, fireHue + 20, 96);
+    this.spawn(x, y, 0, 0, 0.6, 70, fireHue, 72);
+    // Fireball.
+    for (let i = 0; i < 70; i++) {
+      const a = dir(cone);
+      const s = rand(40, 420);
+      this.spawn(x, y, Math.cos(a) * s, Math.sin(a) * s, rand(0.5, 1.2), rand(6, 17), fireHue + rand(-15, 22), rand(52, 70), 'glow', 3.2);
+    }
+    // Sparks and hot debris, streaking.
+    for (let i = 0; i < 60; i++) {
+      const a = dir(cone + 0.2);
+      const s = rand(300, 1000);
+      this.spawn(x, y, Math.cos(a) * s, Math.sin(a) * s, rand(0.4, 1.1), rand(1.5, 3.2), fireHue + rand(10, 30), 82, 'spark', 1.4);
+    }
+    for (let i = 0; i < 16; i++) {
+      const a = dir(cone - 0.2);
+      const s = rand(150, 520);
+      this.spawn(x, y, Math.cos(a) * s, Math.sin(a) * s, rand(1, 1.9), rand(3, 5), hit ? hit.body.hue : fireHue, 58, 'spark', 0.7);
+    }
+    // Smoke left hanging in space.
+    for (let i = 0; i < 20; i++) {
+      const a = dir(cone + 0.3);
+      const s = rand(20, 170);
+      this.spawn(x + Math.cos(a) * 8, y + Math.sin(a) * 8, Math.cos(a) * s, Math.sin(a) * s, rand(1.3, 2.6), rand(12, 26), 225, rand(10, 18), 'smoke', 2.4);
+    }
+    this.waves.push({ x, y, age: 0, max: 0.8, size: 260, hue: fireHue });
+    this.waves.push({ x, y, age: -0.08, max: 0.65, size: 140, hue: fireHue + 25 });
+    this.flash = 1;
   }
 
   // ---------------------------------------------------------------- loop
@@ -764,11 +842,13 @@ export class Game {
       }
       p.x += p.vx * sdt;
       p.y += p.vy * sdt;
-      const drag = Math.exp(-sdt * 1.8);
+      const drag = Math.exp(-sdt * p.drag);
       p.vx *= drag;
       p.vy *= drag;
     }
     this.waves = this.waves.filter((w) => (w.age += sdt) < w.max);
+    this.impacts = this.impacts.filter((m) => (m.age += dt) < 1.4);
+    this.flash = Math.max(0, this.flash - dt * 4);
     this.shake *= Math.exp(-dt * 9);
 
     this.updateBeeps(dt, distT);
@@ -934,6 +1014,10 @@ export class Game {
     c.globalCompositeOperation = 'source-over';
     if (this.vignette) {
       c.fillStyle = this.vignette;
+      c.fillRect(0, 0, cw, ch);
+    }
+    if (this.flash > 0 && this.settings.shake) {
+      c.fillStyle = `rgba(255, 214, 170, ${this.flash * 0.22})`;
       c.fillRect(0, 0, cw, ch);
     }
   }
@@ -1662,7 +1746,41 @@ export class Game {
 
   private drawEffects() {
     const c = this.ctx;
+
+    // Smoke first, normally blended, so fire glows on top of it.
+    for (const p of this.particles) {
+      if (p.kind !== 'smoke') continue;
+      const a = p.life / p.max;
+      const r = p.size * (1 + (1 - a) * 1.8);
+      const g = c.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+      g.addColorStop(0, `hsla(${p.hue}, 14%, ${p.light}%, ${a * 0.4})`);
+      g.addColorStop(1, `hsla(${p.hue}, 14%, ${p.light}%, 0)`);
+      c.fillStyle = g;
+      c.beginPath();
+      c.arc(p.x, p.y, r, 0, Math.PI * 2);
+      c.fill();
+    }
+
     c.globalCompositeOperation = 'lighter';
+    // Scorch glow on whatever was hit, riding along with it.
+    for (const m of this.impacts) {
+      const bp = this.pos[m.body];
+      const b = this.level.bodies[m.body];
+      if (!bp || !b) continue;
+      const f = 1 - m.age / 1.4;
+      const x = bp.x + m.ox;
+      const y = bp.y + m.oy;
+      const r = Math.max(24, b.r * 0.9);
+      const g = c.createRadialGradient(x, y, 0, x, y, r);
+      g.addColorStop(0, `hsla(32, 100%, 72%, ${f * 0.75})`);
+      g.addColorStop(0.4, `hsla(18, 100%, 55%, ${f * 0.35})`);
+      g.addColorStop(1, 'hsla(10, 100%, 50%, 0)');
+      c.fillStyle = g;
+      c.beginPath();
+      c.arc(x, y, r, 0, Math.PI * 2);
+      c.fill();
+    }
+
     for (const w of this.waves) {
       if (w.age < 0) continue;
       const f = w.age / w.max;
@@ -1672,12 +1790,35 @@ export class Game {
       c.arc(w.x, w.y, w.size * (1 - Math.pow(1 - f, 3)), 0, Math.PI * 2);
       c.stroke();
     }
+
+    c.lineCap = 'round';
     for (const p of this.particles) {
+      if (p.kind === 'smoke') continue;
       const a = p.life / p.max;
-      c.fillStyle = `hsla(${p.hue}, 100%, ${p.light}%, ${a})`;
-      c.beginPath();
-      c.arc(p.x, p.y, p.size * (0.4 + 0.6 * a), 0, Math.PI * 2);
-      c.fill();
+      if (p.kind === 'spark') {
+        c.strokeStyle = `hsla(${p.hue}, 100%, ${p.light}%, ${a})`;
+        c.lineWidth = p.size * (0.5 + 0.5 * a);
+        c.beginPath();
+        c.moveTo(p.x, p.y);
+        c.lineTo(p.x - p.vx * 0.035, p.y - p.vy * 0.035);
+        c.stroke();
+      } else if (p.size > 14) {
+        // Big glows (flashes, fireball cores) need a soft falloff or they read as flat discs.
+        const r = p.size * (0.6 + 0.4 * a);
+        const g = c.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+        g.addColorStop(0, `hsla(${p.hue}, 100%, ${p.light}%, ${a})`);
+        g.addColorStop(0.35, `hsla(${p.hue}, 100%, ${p.light - 12}%, ${a * 0.55})`);
+        g.addColorStop(1, `hsla(${p.hue}, 100%, ${p.light - 25}%, 0)`);
+        c.fillStyle = g;
+        c.beginPath();
+        c.arc(p.x, p.y, r, 0, Math.PI * 2);
+        c.fill();
+      } else {
+        c.fillStyle = `hsla(${p.hue}, 100%, ${p.light}%, ${a})`;
+        c.beginPath();
+        c.arc(p.x, p.y, p.size * (0.4 + 0.6 * a), 0, Math.PI * 2);
+        c.fill();
+      }
     }
     c.globalCompositeOperation = 'source-over';
   }
