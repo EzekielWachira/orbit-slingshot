@@ -958,3 +958,12 @@ input[type='range']::-moz-range-thumb {
     flex: 1 1 200px;
   }
 }
+
+/* ---------- replay */
+
+#hud.replaying #btn-hint {
+  display: none;
+}
+#hud.replaying .level-label b {
+  color: var(--accent-2);
+}

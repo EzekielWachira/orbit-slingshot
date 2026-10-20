@@ -112,3 +112,48 @@ export function decodeLevel(s: string): LevelDef | null {
 export function cloneLevel(l: LevelDef): LevelDef {
   return structuredClone(l);
 }
+
+// ---------------------------------------------------------------- replays
+
+/** Which level a replay is for: a campaign index, a daily date, or an encoded custom level. */
+export type LevelRef = { c: number } | { d: string } | { e: string };
+
+export interface ReplayData {
+  ref: LevelRef;
+  vx: number;
+  vy: number;
+  /** Launch time — moving bodies make this part of the shot. */
+  t0: number;
+  shots: number;
+}
+
+export function encodeReplay(r: ReplayData): string {
+  // Full float precision: the physics is deterministic, so the exact launch reproduces the exact flight.
+  return toB64(JSON.stringify({ r: r.ref, v: [r.vx, r.vy, r.t0], s: r.shots }));
+}
+
+export function decodeReplay(s: string): ReplayData | null {
+  try {
+    const d = JSON.parse(fromB64(s));
+    const v = arr(d.v);
+    if (v.length !== 3 || !v.every((n) => typeof n === 'number' && Number.isFinite(n))) return null;
+    const [vx, vy, t0] = v as number[];
+    if (Math.hypot(vx, vy) > 1000 || Math.abs(t0) > 1e6) return null;
+    let ref: LevelRef;
+    const r = d.r ?? {};
+    if (typeof r.c === 'number' && Number.isInteger(r.c) && r.c >= 0) ref = { c: r.c };
+    else if (typeof r.d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.d)) ref = { d: r.d };
+    else if (typeof r.e === 'string' && r.e.length < 4000) ref = { e: r.e };
+    else return null;
+    return { ref, vx, vy, t0, shots: num(d.s, 1, 999, 1) | 0 };
+  } catch {
+    return null;
+  }
+}
+
+/** Round-trips a level through the share encoding, so play, hints and replays all see identical numbers. */
+export function canonical(l: LevelDef): LevelDef {
+  const c = decodeLevel(encodeLevel(l))!;
+  c.hint = l.hint;
+  return c;
+}

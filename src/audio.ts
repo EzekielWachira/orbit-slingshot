@@ -4,20 +4,30 @@ let ctx: AudioContext | null = null;
 let master: GainNode | null = null;
 let muted = false;
 
-function ensure(): AudioContext | null {
-  if (muted) return null;
+/** The shared audio graph (created on first use). Mute silences `master`, which music also feeds. */
+export function audioGraph(): { ctx: AudioContext; master: GainNode } | null {
   if (!ctx) {
     try {
       ctx = new AudioContext();
       master = ctx.createGain();
-      master.gain.value = 0.5;
+      master.gain.value = muted ? 0 : 0.5;
       master.connect(ctx.destination);
+      // Nothing should keep playing in a background tab.
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) void ctx?.suspend();
+        else void ctx?.resume();
+      });
     } catch {
       return null;
     }
   }
-  if (ctx.state === 'suspended') void ctx.resume();
-  return ctx;
+  if (ctx.state === 'suspended' && !document.hidden) void ctx.resume();
+  return { ctx, master: master! };
+}
+
+function ensure(): AudioContext | null {
+  if (muted) return null;
+  return audioGraph()?.ctx ?? null;
 }
 
 function noiseBuffer(ac: AudioContext, seconds: number): AudioBuffer {
@@ -58,8 +68,9 @@ function noise(start: number, dur: number, vol: number, fromHz: number, toHz: nu
 }
 
 export const sfx = {
+  /** Call from a user gesture: browsers only allow audio to start after one. */
   unlock() {
-    ensure();
+    audioGraph();
   },
   launch(power: number) {
     const ac = ensure();

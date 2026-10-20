@@ -26,10 +26,11 @@ import {
   type Wormhole,
 } from './physics.ts';
 import { sfx } from './audio.ts';
+import { music } from './music.ts';
 import { mulberry32 } from './rng.ts';
 
 type Phase = 'idle' | 'aiming' | 'flying' | 'resolving' | 'won';
-type Mode = 'play' | 'edit' | 'attract';
+type Mode = 'play' | 'edit' | 'attract' | 'replay';
 
 export type Selection =
   | { type: 'launch' }
@@ -57,6 +58,7 @@ export interface Settings {
   shake: boolean;
   grid: boolean;
   bestRoute: boolean;
+  music: boolean;
 }
 
 interface Particle {
@@ -96,6 +98,8 @@ export interface GameHooks {
   onFlightChange(flying: boolean): void;
   onSelect(sel: Selection | null): void;
   onEdit(): void;
+  /** A replay didn't reach the beacon (only possible if a level changed since it was recorded). */
+  onReplayFail(): void;
 }
 
 const TRAIL_MAX = 700;
@@ -108,7 +112,7 @@ const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 
 export class Game {
   active = false;
-  settings: Settings = { assist: false, shake: true, grid: true, bestRoute: true };
+  settings: Settings = { assist: false, shake: true, grid: true, bestRoute: true, music: true };
   /** Fast-forward multiplier toggle for long flights. */
   ff = false;
 
@@ -156,6 +160,10 @@ export class Game {
   private drag: { sx: number; sy: number; x: number; y: number; id: number } | null = null;
   private sel: Selection | null = null;
   private editDrag: { id: number; ox: number; oy: number } | null = null;
+  /** Keyboard aim, in launch-direction radians (canvas coords) and 0–1 power. */
+  private kbAim: { angle: number; power: number } | null = null;
+  private lastAim: { angle: number; power: number } | null = null;
+  private replayShot: (Launch & { lead: number }) | null = null;
   private gx: Float32Array;
   private gy: Float32Array;
   private gridCols = Math.ceil((WORLD_W + GRID_PAD * 2) / GRID) + 1;
@@ -197,6 +205,10 @@ export class Game {
     this.hint = null;
     this.hinted = false;
     this.ff = false;
+    this.kbAim = null;
+    this.lastAim = null;
+    this.replayShot = null;
+    this.preview.length = 0;
     this.sel = null;
     this.cam = { x: WORLD_W / 2, y: WORLD_H / 2, zoom: 1 };
     this.timeScale = 1;
@@ -222,6 +234,46 @@ export class Game {
     this.loadLevel(level, { seed: 99 });
     this.mode = 'edit';
     this.active = true;
+  }
+
+  /** Replays a recorded launch: the probe winds up for `lead` seconds, then fires at exactly t0. */
+  playReplay(level: LevelDef, shot: Launch, seed: number) {
+    this.loadLevel(level, { seed });
+    this.mode = 'replay';
+    this.active = true;
+    const lead = 1.6;
+    this.replayShot = { ...shot, lead };
+    this.clock = shot.t0 - lead;
+  }
+
+  /** Arrow-key aiming. Starts from the last shot (or straight at the beacon) for fine-tuning. */
+  nudgeAim(dAngle: number, dPower: number): boolean {
+    if (!this.active || this.mode !== 'play') return false;
+    if (this.phase === 'idle') {
+      const { launch: l, target: t } = this.level;
+      this.kbAim = { ...(this.lastAim ?? { angle: Math.atan2(t.y - l.y, t.x - l.x), power: 0.5 }) };
+      this.phase = 'aiming';
+    } else if (this.phase !== 'aiming' || !this.kbAim) {
+      return false;
+    }
+    this.kbAim.angle = (this.kbAim.angle + dAngle + Math.PI * 4) % (Math.PI * 2);
+    this.kbAim.power = clamp(Math.round((this.kbAim.power + dPower) * 1000) / 1000, 0.08, 1);
+    return true;
+  }
+
+  fireKeyboardAim(): boolean {
+    if (this.phase !== 'aiming' || !this.kbAim) return false;
+    const d = this.aimVec();
+    this.kbAim = null;
+    this.launch(d);
+    return true;
+  }
+
+  cancelKeyboardAim(): boolean {
+    if (this.phase !== 'aiming' || !this.kbAim) return false;
+    this.kbAim = null;
+    this.phase = 'idle';
+    return true;
   }
 
   get isFlying() {
@@ -286,6 +338,11 @@ export class Game {
     }
   }
 
+  /** Modes where a real flight is happening (as opposed to the title backdrop or the editor). */
+  private get live() {
+    return this.mode === 'play' || this.mode === 'replay';
+  }
+
   // ---------------------------------------------------------------- input
 
   private screenToWorld(sx: number, sy: number): Vec {
@@ -298,7 +355,12 @@ export class Game {
     return MAX_DRAG / screenMax;
   }
 
-  private dragWorld(): Vec {
+  /** The current aim as a drag vector in world units, from the pointer or the keyboard. */
+  private aimVec(): Vec {
+    if (this.kbAim) {
+      const len = this.kbAim.power * MAX_DRAG;
+      return { x: -Math.cos(this.kbAim.angle) * len, y: -Math.sin(this.kbAim.angle) * len };
+    }
     if (!this.drag) return { x: 0, y: 0 };
     const k = this.dragScale();
     let x = (this.drag.x - this.drag.sx) * k;
@@ -315,7 +377,10 @@ export class Game {
     sfx.unlock();
     if (!this.active) return;
     if (this.mode === 'edit') return this.editDown(e);
-    if (this.mode !== 'play' || this.phase !== 'idle') return;
+    if (this.mode !== 'play') return;
+    // A pointer drag takes over from a keyboard aim in progress.
+    if (this.phase === 'aiming' && this.kbAim) this.kbAim = null;
+    else if (this.phase !== 'idle') return;
     this.drag = { sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, id: e.pointerId };
     this.phase = 'aiming';
     this.canvas.setPointerCapture(e.pointerId);
@@ -337,7 +402,7 @@ export class Game {
       return;
     }
     if (!this.drag || e.pointerId !== this.drag.id) return;
-    const d = this.dragWorld();
+    const d = this.aimVec();
     this.drag = null;
     if (Math.hypot(d.x, d.y) >= MIN_DRAG && this.phase === 'aiming') this.launch(d);
     else this.phase = 'idle';
@@ -346,7 +411,7 @@ export class Game {
   private cancelPointer() {
     this.drag = null;
     this.editDrag = null;
-    if (this.phase === 'aiming') this.phase = 'idle';
+    if (this.phase === 'aiming' && !this.kbAim) this.phase = 'idle';
   }
 
   private hitTest(w: Vec): Selection | null {
@@ -444,17 +509,23 @@ export class Game {
     this.stepCount = 0;
     this.trail = [{ x, y }];
     this.lastLaunch = { vx, vy, t0: this.clock };
-    if (this.mode === 'play') this.hooks.onFlightChange(true);
+    if (this.live) this.hooks.onFlightChange(true);
   }
 
   private launch(d: Vec) {
     const v = launchVelocity(d.x, d.y);
-    const power = Math.hypot(d.x, d.y) / MAX_DRAG;
-    this.beginFlight(v.x, v.y);
+    this.lastAim = { angle: Math.atan2(v.y, v.x), power: Math.min(1, Math.hypot(d.x, d.y) / MAX_DRAG) };
+    this.fire(v.x, v.y);
+  }
+
+  /** Launches with an exact velocity (replays must not round-trip through a drag vector). */
+  private fire(vx: number, vy: number) {
+    const power = Math.hypot(vx, vy) / MAX_SPEED;
+    this.beginFlight(vx, vy);
     this.shots++;
     this.hooks.onShot(this.shots);
     sfx.launch(power);
-    const ang = Math.atan2(-v.y, -v.x);
+    const ang = Math.atan2(-vy, -vx);
     for (let i = 0; i < 26; i++) {
       const a = ang + rand(-0.6, 0.6);
       const s = rand(60, 260) * (0.5 + power);
@@ -479,7 +550,7 @@ export class Game {
         this.spawn(p.x, p.y, Math.cos(a) * s, Math.sin(a) * s, rand(0.3, 0.7), rand(1, 2.4), hue, 72);
       }
     }
-    if (this.mode === 'play') sfx.warp();
+    if (this.live) sfx.warp();
   }
 
   private collectDust(i: number) {
@@ -521,7 +592,7 @@ export class Game {
       if (this.ghosts.length > 3) this.ghosts.shift();
     }
     this.phase = 'resolving';
-    const quiet = this.mode !== 'play';
+    const quiet = !this.live;
 
     if (out === 'crash') {
       const hitHole = this.nearestBody()?.kind === 'blackhole';
@@ -593,7 +664,7 @@ export class Game {
     const lvl = this.level;
     const t = lvl.target;
     const distT = Math.hypot(this.probe.x - t.x, this.probe.y - t.y);
-    const nearTarget = this.phase === 'flying' && this.mode === 'play' && distT < t.r * 4.5;
+    const nearTarget = this.phase === 'flying' && this.live && distT < t.r * 4.5;
 
     let goalScale = 1;
     if (nearTarget) goalScale = 0.3;
@@ -603,6 +674,14 @@ export class Game {
     const fast = this.ff && this.phase === 'flying' && !nearTarget ? 3 : 1;
     const sdt = dt * this.timeScale * fast;
     this.anim += dt * this.timeScale;
+
+    const rs = this.replayShot;
+    if (rs && this.phase === 'idle' && this.clock + sdt >= rs.t0) {
+      // Fire at exactly the recorded time so the flight is identical.
+      this.clock = rs.t0;
+      this.replayShot = null;
+      this.fire(rs.vx, rs.vy);
+    }
 
     if (this.phase === 'flying') {
       this.acc += sdt;
@@ -622,12 +701,12 @@ export class Game {
           this.trail.push({ x: this.probe.x, y: this.probe.y });
         }
         if (this.trail.length > TRAIL_MAX) this.trail.shift();
-        if (this.dustGot.length && this.mode === 'play') {
+        if (this.dustGot.length && this.live) {
           const k = dustHit(lvl, this.probe, this.dustGot);
           if (k >= 0) this.collectDust(k);
         }
         if (out !== 'flying' && out !== 'warp') this.resolve(out);
-        else if (this.flightTime > MAX_FLIGHT && this.mode === 'play') this.resolve('lost', 'Trapped in orbit');
+        else if (this.flightTime > MAX_FLIGHT && this.live) this.resolve('lost', 'Trapped in orbit');
       }
       if (this.phase === 'flying' && Math.random() < 0.6) {
         const p = this.probe;
@@ -638,8 +717,8 @@ export class Game {
     }
     bodyPositions(lvl, this.clock, this.pos);
 
-    if (this.phase === 'aiming' && this.drag) {
-      const d = this.dragWorld();
+    if (this.phase === 'aiming') {
+      const d = this.aimVec();
       this.preview.length = 0;
       if (Math.hypot(d.x, d.y) >= MIN_DRAG) {
         const v = launchVelocity(d.x, d.y);
@@ -653,6 +732,7 @@ export class Game {
       if (this.resolveTimer <= 0) {
         this.resetProbe();
         if (this.mode === 'attract') this.launchAttract();
+        if (this.mode === 'replay') this.hooks.onReplayFail();
       }
     }
 
@@ -687,6 +767,11 @@ export class Game {
     }
     this.waves = this.waves.filter((w) => (w.age += sdt) < w.max);
     this.shake *= Math.exp(-dt * 9);
+
+    let mood = this.live ? 0.25 : 0.15;
+    if (this.phase === 'flying' && this.live) mood = 0.45 + 0.55 * clamp(1 - (distT - t.r) / 500, 0, 1);
+    if (this.phase === 'won') mood = this.winTimer < 3 ? 1 : 0.4;
+    music.setIntensity(mood);
 
     // Camera: frame the arrival, then push in on a win.
     let goal = { x: WORLD_W / 2, y: WORLD_H / 2, zoom: 1 };
@@ -1312,8 +1397,8 @@ export class Game {
 
     // Does the player's current aim match the hint?
     let matched = false;
-    if (this.phase === 'aiming' && this.drag) {
-      const cur = this.dragWorld();
+    if (this.phase === 'aiming') {
+      const cur = this.aimVec();
       const v = launchVelocity(cur.x, cur.y);
       const da = Math.abs(((Math.atan2(v.y, v.x) - dir + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
       const dp = Math.abs(Math.hypot(v.x, v.y) / MAX_SPEED - power);
@@ -1394,12 +1479,25 @@ export class Game {
     c.globalCompositeOperation = 'source-over';
   }
 
+  /** How far the probe is pulled back right now: the live aim, or a replay winding up. */
+  private pullVec(): Vec | null {
+    if (this.phase === 'aiming') return this.aimVec();
+    const rs = this.replayShot;
+    if (rs && this.phase === 'idle') {
+      const k = clamp(1 - (rs.t0 - this.clock) / rs.lead, 0, 1);
+      const d = dragFor(rs.vx, rs.vy);
+      return { x: d.x * k, y: d.y * k };
+    }
+    return null;
+  }
+
   private drawAim(S: number) {
-    if (this.phase !== 'aiming' || !this.drag) return;
+    const d = this.pullVec();
+    if (!d) return;
     const c = this.ctx;
     const { x, y } = this.level.launch;
-    const d = this.dragWorld();
     const power = Math.hypot(d.x, d.y) / MAX_DRAG;
+    const aiming = this.phase === 'aiming';
 
     c.globalCompositeOperation = 'lighter';
     c.strokeStyle = 'hsla(200, 100%, 80%, 0.5)';
@@ -1419,6 +1517,27 @@ export class Game {
     c.beginPath();
     c.arc(x, y, 30, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * power);
     c.stroke();
+
+    // Exact readout, so a good shot can be repeated (arrow keys fine-tune it).
+    if (power > 0.01) {
+      const deg = ((-Math.atan2(-d.y, -d.x) * 180) / Math.PI + 360) % 360;
+      const below = y < 120;
+      c.globalCompositeOperation = 'source-over';
+      c.textAlign = 'center';
+      c.font = `600 ${13 / S}px "Space Grotesk", sans-serif`;
+      c.fillStyle = 'rgba(225, 235, 255, 0.92)';
+      c.fillText(`${deg.toFixed(1)}°  ·  ${(power * 100).toFixed(1)}%`, x, below ? y + 52 + 13 / S : y - 46);
+      if (this.kbAim) {
+        c.font = `500 ${11 / S}px "Space Grotesk", sans-serif`;
+        c.fillStyle = 'rgba(160, 175, 220, 0.85)';
+        c.fillText('Enter to launch', x, below ? y + 56 + 28 / S : y - 46 - 16 / S);
+      }
+      c.globalCompositeOperation = 'lighter';
+    }
+    if (!aiming) {
+      c.globalCompositeOperation = 'source-over';
+      return;
+    }
 
     const n = this.preview.length;
     for (let i = 0; i < n; i++) {
@@ -1487,10 +1606,10 @@ export class Game {
     if (this.mode === 'attract' && this.phase !== 'flying') return;
     const c = this.ctx;
     let { x, y } = this.probe;
-    if (this.phase === 'aiming') {
-      const d = this.dragWorld();
-      x += d.x * 0.22;
-      y += d.y * 0.22;
+    const pull = this.pullVec();
+    if (pull) {
+      x += pull.x * 0.22;
+      y += pull.y * 0.22;
     }
     c.globalCompositeOperation = 'lighter';
     const g = c.createRadialGradient(x, y, 0, x, y, PROBE_R * 5);

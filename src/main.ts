@@ -3,8 +3,9 @@ import { Game, WORM_HUES, type Launch, type Selection, type Settings, type WinIn
 import { DEMO_LEVEL, LEVELS } from './levels.ts';
 import { hasMovingBodies, starsFor, type BodyDef, type LevelDef } from './physics.ts';
 import { sfx } from './audio.ts';
+import { music } from './music.ts';
 import { dateKey } from './daily.ts';
-import { cloneLevel, decodeLevel, encodeLevel } from './share.ts';
+import { canonical, cloneLevel, decodeLevel, decodeReplay, encodeLevel, encodeReplay, type LevelRef, type ReplayData } from './share.ts';
 import { dailyAsync, solveAsync } from './worker.ts';
 import { hashString } from './rng.ts';
 
@@ -35,7 +36,7 @@ function loadSave(): Save {
     stars: [],
     muted: false,
     best: {},
-    settings: { assist: false, shake: true, grid: true, bestRoute: true },
+    settings: { assist: false, shake: true, grid: true, bestRoute: true, music: true },
     daily: {},
     streak: { last: '', count: 0 },
   };
@@ -104,15 +105,19 @@ function notify(text: string, kind: 'bad' | 'info' | 'good' = 'info', ms = 1800)
 type PlayContext =
   | { kind: 'campaign'; index: number }
   | { kind: 'daily'; key: string }
-  | { kind: 'custom'; fromEditor: boolean };
+  | { kind: 'custom'; fromEditor: boolean }
+  | { kind: 'replay'; data: ReplayData; level: LevelDef };
 
 let ctx: PlayContext = { kind: 'campaign', index: 0 };
 // The level as originally loaded, so retries start clean (the editor mutates drafts in place).
 let lastLevel: LevelDef = LEVELS[0];
 let editorDraft: LevelDef | null = null;
+let lastWin: WinInfo | null = null;
+const hud = screens.hud;
 
 const game = new Game($<HTMLCanvasElement>('#game'), {
   onShot(shots) {
+    if (ctx.kind === 'replay') return;
     shotsLabel.textContent = String(shots);
     if (shots > 0) hintText.classList.add('faded');
   },
@@ -130,6 +135,9 @@ const game = new Game($<HTMLCanvasElement>('#game'), {
   },
   onSelect: renderInspector,
   onEdit: saveDraft,
+  onReplayFail() {
+    showReplayEnd(false);
+  },
 });
 game.settings = save.settings;
 
@@ -147,10 +155,10 @@ function play(level: LevelDef, next: PlayContext) {
     best = save.best[next.index]?.launch ?? null;
   } else if (next.kind === 'daily') {
     label = '<b>Daily</b> ';
-    seed = hashString(next.key) % 10000;
+    seed = seedFor({ d: next.key }, level);
   } else {
     label = '<b>Custom</b> ';
-    seed = hashString(level.name) % 10000;
+    seed = seedFor({ e: '' }, level);
   }
   game.loadLevel(level, { seed, best });
   game.active = true;
@@ -162,19 +170,29 @@ function play(level: LevelDef, next: PlayContext) {
   ffBtn.classList.remove('active');
   menuBtn.setAttribute('aria-label', next.kind === 'custom' && next.fromEditor ? 'Back to editor' : 'Menu');
   menuBtn.classList.toggle('to-editor', next.kind === 'custom' && next.fromEditor);
+  hud.classList.remove('replaying');
   show('hud');
+}
+
+/** Background seed, so a level always gets the same nebula wherever it's played from. */
+function seedFor(ref: LevelRef, level: LevelDef) {
+  if ('c' in ref) return ref.c;
+  if ('d' in ref) return hashString(ref.d) % 10000;
+  return hashString(level.name) % 10000;
 }
 
 const playCampaign = (i: number) => play(LEVELS[i], { kind: 'campaign', index: i });
 
 function replay() {
   if (ctx.kind === 'campaign') playCampaign(ctx.index);
+  else if (ctx.kind === 'replay') startReplay(ctx.data, ctx.level);
   else play(cloneLevel(lastLevel), ctx);
 }
 
 function leavePlay() {
   game.active = false;
   if (ctx.kind === 'campaign') openLevels();
+  else if (ctx.kind === 'replay') openTitle();
   else if (ctx.kind === 'custom' && ctx.fromEditor) openEditor(editorDraft ?? undefined);
   else openTitle();
 }
@@ -253,19 +271,26 @@ function setMuted(m: boolean) {
 
 // ---------------------------------------------------------------- daily
 
-async function openDaily() {
-  const key = dateKey();
+/** Today's daily is cached; other dates (from replay links) are regenerated in the worker. */
+async function loadDaily(key: string): Promise<LevelDef> {
   let level = save.dailyLevel?.key === key ? decodeLevel(save.dailyLevel.enc) : null;
   if (!level) {
     show('loading');
     game.startAttract(DEMO_LEVEL);
-    level = await dailyAsync(key);
-    save.dailyLevel = { key, enc: encodeLevel(level) };
-    persist();
-    // Keep the daily hint text, which isn't part of the share encoding.
+    // Canonical form, so hints and replays see exactly the numbers a share link would carry.
+    level = canonical(await dailyAsync(key));
+    if (key === dateKey()) {
+      save.dailyLevel = { key, enc: encodeLevel(level) };
+      persist();
+    }
   }
   level.hint = `Daily challenge · ${key}`;
-  play(level, { kind: 'daily', key });
+  return level;
+}
+
+async function openDaily() {
+  const key = dateKey();
+  play(await loadDaily(key), { kind: 'daily', key });
 }
 
 function recordDaily(key: string, r: DailyResult) {
@@ -286,6 +311,8 @@ function recordDaily(key: string, r: DailyResult) {
 // ---------------------------------------------------------------- win
 
 function onWin(info: WinInfo) {
+  lastWin = info;
+  if (ctx.kind === 'replay') return showReplayEnd(true);
   const missed = info.dust < info.dustTotal;
   const stars = starsFor(info.shots, missed, info.hinted);
   if (ctx.kind === 'campaign') {
@@ -324,22 +351,96 @@ function showWin(info: WinInfo, stars: number) {
     const i = ctx.index;
     if (!lastCampaign) add('Next level', true, () => playCampaign(i + 1));
     add('Retry', lastCampaign, replay);
+    add('Share replay', false, () => shareReplay({ c: i }));
     add('Levels', false, openLevels);
   } else if (ctx.kind === 'daily') {
     const key = ctx.key;
     add('Share result', true, () => shareDaily(key));
+    add('Share replay', false, () => shareReplay({ d: key }));
     add('Retry', false, replay);
     add('Menu', false, openTitle);
-  } else if (ctx.fromEditor) {
+  } else if (ctx.kind === 'custom' && ctx.fromEditor) {
     add('Back to editor', true, () => openEditor(editorDraft ?? undefined));
     add('Retry', false, replay);
     add('Share level', false, () => shareLevel(lastLevel));
+    add('Share replay', false, () => shareReplay({ e: encodeLevel(lastLevel) }));
   } else {
     add('Retry', true, replay);
+    add('Share replay', false, () => shareReplay({ e: encodeLevel(lastLevel) }));
     add('Remix in editor', false, () => openEditor(cloneLevel(lastLevel)));
     add('Menu', false, openTitle);
   }
   show('hud', 'win');
+}
+
+// ---------------------------------------------------------------- replays
+
+function startReplay(data: ReplayData, level: LevelDef) {
+  ctx = { kind: 'replay', data, level };
+  lastLevel = cloneLevel(level);
+  game.playReplay(cloneLevel(level), { vx: data.vx, vy: data.vy, t0: data.t0 }, seedFor(data.ref, level));
+  const where = 'c' in data.ref ? `${pad2(data.ref.c + 1)} ` : 'd' in data.ref ? `Daily ${data.ref.d} · ` : '';
+  levelLabel.innerHTML = '<b>Replay</b> ';
+  levelLabel.append(where + level.name);
+  shotsLabel.textContent = String(data.shots);
+  hintText.textContent = data.shots === 1 ? 'Watching a one-shot win' : `Watching the winning shot (won in ${data.shots} shots)`;
+  hintText.classList.remove('faded');
+  menuBtn.classList.remove('to-editor');
+  menuBtn.setAttribute('aria-label', 'Menu');
+  hud.classList.add('replaying');
+  ffBtn.classList.remove('active');
+  show('hud');
+}
+
+async function openReplay(data: ReplayData) {
+  const r = data.ref;
+  let level: LevelDef | null = null;
+  if ('c' in r) level = LEVELS[r.c] ?? null;
+  else if ('d' in r) level = await loadDaily(r.d);
+  else level = decodeLevel(r.e);
+  if (!level) {
+    notify('That replay link is broken', 'bad');
+    return openTitle();
+  }
+  startReplay(data, level);
+}
+
+/** Shown when a replay finishes: it landed, or (if a level changed since) it didn't. */
+function showReplayEnd(landed: boolean) {
+  if (ctx.kind !== 'replay') return;
+  const { data, level } = ctx;
+  game.active = false;
+  $('#win-title').textContent = landed ? 'Replay' : 'Replay missed';
+  $('#win-stars').innerHTML = '';
+  $('#win-shots').textContent = landed
+    ? `${level.name} · won in ${data.shots} ${data.shots === 1 ? 'shot' : 'shots'}${lastWin?.dustTotal ? ` · ✦ ${lastWin.dust}/${lastWin.dustTotal}` : ''}`
+    : 'This level has changed since the replay was recorded.';
+  const actions = $('#win-actions');
+  actions.innerHTML = '';
+  const add = (label: string, primary: boolean, fn: () => void) => {
+    const b = document.createElement('button');
+    b.className = `btn ${primary ? 'primary' : 'ghost'}`;
+    b.textContent = label;
+    b.addEventListener('click', fn);
+    actions.append(b);
+  };
+  add('Play this level', true, () => {
+    const r = data.ref;
+    if ('c' in r) playCampaign(r.c);
+    else if ('d' in r && r.d === dateKey()) void openDaily();
+    else play(cloneLevel(level), { kind: 'custom', fromEditor: false });
+  });
+  add('Watch again', false, replay);
+  add('Menu', false, openTitle);
+  show('hud', 'win');
+}
+
+function shareReplay(ref: LevelRef) {
+  if (!lastWin) return;
+  const { launch, shots } = lastWin;
+  const enc = encodeReplay({ ref, vx: launch.vx, vy: launch.vy, t0: launch.t0, shots });
+  const what = shots === 1 ? 'one-shot' : `${shots}-shot win`;
+  void shareOut(`Watch my ${what} on "${lastLevel.name}" in Orbit Slingshot`, `${baseUrl()}#replay=${enc}`, 'Replay link copied to clipboard');
 }
 
 // ---------------------------------------------------------------- sharing
@@ -385,7 +486,7 @@ function shareLevel(level: LevelDef) {
 
 let hintBusy = false;
 async function requestHint() {
-  if (hintBusy || !isVisible('hud') || isVisible('win') || game.isFlying) return;
+  if (hintBusy || ctx.kind === 'replay' || !isVisible('hud') || isVisible('win') || game.isFlying) return;
   const level = game.currentLevel;
   const moving = hasMovingBodies(level);
   hintBusy = true;
@@ -670,6 +771,7 @@ const SETTING_LABELS: [keyof Settings, string, string][] = [
   ['bestRoute', 'Show best route', 'A faint gold line of your best winning shot'],
   ['grid', 'Gravity grid', 'The warped space-time grid behind everything'],
   ['shake', 'Screen shake', 'Shake the camera on crashes'],
+  ['music', 'Music', 'A generative soundtrack that builds as you near the beacon'],
 ];
 
 function openSettings() {
@@ -685,6 +787,7 @@ function openSettings() {
     input.checked = save.settings[key];
     input.addEventListener('change', () => {
       save.settings[key] = input.checked;
+      if (key === 'music') music.setEnabled(input.checked);
       persist();
     });
     list.append(row);
@@ -695,8 +798,19 @@ function openSettings() {
 // ---------------------------------------------------------------- wiring
 
 document.addEventListener('click', (e) => {
-  if ((e.target as HTMLElement).closest('button')) sfx.click();
+  const btn = (e.target as HTMLElement).closest('button');
+  if (!btn) return;
+  sfx.click();
+  // Don't leave HUD buttons focused, or Enter/Space would press them again mid-game.
+  if (btn.closest('#hud')) btn.blur();
 });
+// Browsers only allow audio after a user gesture, so music starts on the first one.
+const startAudio = () => {
+  sfx.unlock();
+  music.start();
+};
+document.addEventListener('pointerdown', startAudio);
+document.addEventListener('keydown', startAudio);
 
 $('#btn-play').addEventListener('click', () => playCampaign(firstUnfinished()));
 $('#btn-levels').addEventListener('click', openLevels);
@@ -732,7 +846,7 @@ $('#ed-test').addEventListener('click', () => {
   if (!editorDraft) return;
   editorDraft.name = nameInput.value.trim() || 'My level';
   saveDraft();
-  play(cloneLevel(editorDraft), { kind: 'custom', fromEditor: true });
+  play(canonical(editorDraft), { kind: 'custom', fromEditor: true });
 });
 $('#ed-check').addEventListener('click', () => void checkDraft());
 $('#ed-share').addEventListener('click', () => {
@@ -759,7 +873,7 @@ inspector.addEventListener('click', (e) => {
 });
 
 window.addEventListener('keydown', (e) => {
-  if ((e.target as HTMLElement).matches('input')) return;
+  if (e.target instanceof HTMLInputElement) return;
   const winOpen = isVisible('win');
   const playing = isVisible('hud') && !winOpen;
   const k = e.key.toLowerCase();
@@ -768,9 +882,18 @@ window.addEventListener('keydown', (e) => {
     else if (e.key === 'Escape') game.select(null);
     return;
   }
+  const arrows: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] };
+  if (e.key in arrows && playing && ctx.kind !== 'replay') {
+    // Left turns the aim anticlockwise, right clockwise: 0.5° a press (Shift: 0.1°). Up/down: power 1% (Shift: 0.2%).
+    const [turn, push] = arrows[e.key];
+    const fine = e.shiftKey ? 0.2 : 1;
+    if (game.nudgeAim(turn * ((0.5 * fine * Math.PI) / 180), push * 0.01 * fine)) e.preventDefault();
+    return;
+  }
   if (k === 'r') {
     if (playing || winOpen) replay();
   } else if (e.key === 'Escape') {
+    if (playing && game.cancelKeyboardAim()) return;
     if (playing || winOpen) leavePlay();
     else if (isVisible('levels') || isVisible('settings')) openTitle();
   } else if (e.key === ' ') {
@@ -783,7 +906,11 @@ window.addEventListener('keydown', (e) => {
   } else if (k === 'f') {
     if (playing) ffBtn.click();
   } else if (e.key === 'Enter' || k === 'n') {
-    if (winOpen) ($('#win-actions .btn.primary') as HTMLButtonElement | null)?.click();
+    if (playing && e.key === 'Enter' && game.fireKeyboardAim()) e.preventDefault();
+    else if (winOpen) {
+      e.preventDefault();
+      ($('#win-actions .btn.primary') as HTMLButtonElement | null)?.click();
+    }
   } else if (k === 'm') {
     setMuted(!save.muted);
   }
@@ -803,10 +930,15 @@ function route() {
     notify('That level link is broken', 'bad');
   } else if (hash === 'daily') {
     return void openDaily();
+  } else if (hash.startsWith('replay=')) {
+    const data = decodeReplay(hash.slice(7));
+    if (data) return void openReplay(data);
+    notify('That replay link is broken', 'bad');
   }
   openTitle();
 }
 
 setMuted(save.muted);
+music.setEnabled(save.settings.music, false);
 window.addEventListener('hashchange', route);
 route();

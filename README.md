@@ -12,8 +12,11 @@ A gravity puzzle for the browser. Drag to pull back, release to launch, and bend
 - **Level editor:** place and drag bodies, wormholes and stardust, test-play, check that the level is solvable, and share it as a link (the level lives in the URL, so no server is needed)
 - **Hints:** a solver running in a Web Worker finds a working shot and shows it as a gold ghost (using one caps the level at two stars)
 - **Best route:** your best winning shot appears as a faint gold line when you replay a level
+- **Replay links:** share any win as a link that replays your exact flight (the physics is deterministic, so a launch velocity and time reproduce it perfectly)
+- **Fine aiming:** arrow keys nudge the angle and power from your last shot, with an exact readout (e.g. `23.4° · 71.2%`) so good shots can be repeated
+- **Music:** a generative ambient soundtrack that brightens and builds as the probe nears the beacon
 - **Fast-forward** for long orbits, a slow-motion camera on arrival, and synthesized sound
-- **Settings:** longer aim preview, screen shake, gravity grid, best route
+- **Settings:** longer aim preview, screen shake, gravity grid, best route, music
 
 ## Run locally
 
@@ -35,6 +38,9 @@ npm run dev
 | Input | Action |
 | --- | --- |
 | Drag + release | Aim and launch |
+| `←` `→` | Turn aim 0.5° (hold `Shift` for 0.1°) |
+| `↑` `↓` | Change power 1% (hold `Shift` for 0.2%) |
+| `Enter` | Launch the keyboard aim |
 | `H` | Hint |
 | `F` | Toggle fast-forward |
 | `Space` | Recall probe mid-flight |
@@ -51,6 +57,7 @@ In the editor: drag to move, scroll to resize the selection, `Delete` to remove 
 | `…/#daily` | Today's daily challenge |
 | `…/#play=<level>` | A shared custom level |
 | `…/#edit=<level>` | A shared level in the editor |
+| `…/#replay=<data>` | A replay of someone's winning shot |
 
 ## Code map
 
@@ -60,7 +67,8 @@ In the editor: drag to move, scroll to resize the selection, `Delete` to remove 
 | `src/solver.ts` | Random-search solver with robustness scoring |
 | `src/daily.ts` | Seeded daily level generator (solver-checked) |
 | `src/share.ts` | Compact, sanitised level encoding for URLs |
-| `src/game.ts` | Rendering, input, camera, effects and the editor canvas |
+| `src/game.ts` | Rendering, input, camera, effects, replays and the editor canvas |
+| `src/music.ts` | Generative soundtrack (Web Audio) |
 | `src/main.ts` | Menus, modes, saving, editor UI, sharing and hints |
 | `src/levels.ts` | Campaign levels on a 1600×900 world |
 
