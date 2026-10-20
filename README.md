@@ -75,3 +75,7 @@ In the editor: drag to move, scroll to resize the selection, `Delete` to remove 
 ## Deploying to GitHub Pages
 
 `.github/workflows/deploy.yml` runs the level check, builds and deploys on every push to `main`. If any level can't be solved, the deploy stops.
+
+## License
+
+[MIT](LICENSE.md) © 2026 Ezekiel Wachira
