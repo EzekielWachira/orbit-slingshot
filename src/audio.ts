@@ -109,6 +109,15 @@ export const sfx = {
     tone(140, t + 0.12, 0.35, 'sine', 0.12, 1100);
     noise(t, 0.3, 0.12, 6000, 500);
   },
+  /** Proximity blip near the beacon; `close` 0–1 raises pitch and volume. */
+  beep(close: number) {
+    const ac = ensure();
+    if (!ac) return;
+    const t = ac.currentTime;
+    const f = 720 + close * 900;
+    tone(f, t, 0.07, 'sine', 0.08 + close * 0.06);
+    tone(f * 2, t, 0.04, 'triangle', 0.02);
+  },
   /** Rising pitch as you collect more in one flight. */
   dust(n: number) {
     const ac = ensure();

@@ -155,6 +155,9 @@ export class Game {
   private timeScale = 1;
   private shake = 0;
   private resolveTimer = 0;
+  private beepTimer = 0;
+  /** 1 on each proximity beep, fading to 0: flashes the beacon in time with the sound. */
+  private targetPing = 0;
   private winTimer = 0;
   private winFired = false;
   private drag: { sx: number; sy: number; x: number; y: number; id: number } | null = null;
@@ -768,6 +771,8 @@ export class Game {
     this.waves = this.waves.filter((w) => (w.age += sdt) < w.max);
     this.shake *= Math.exp(-dt * 9);
 
+    this.updateBeeps(dt, distT);
+
     let mood = this.live ? 0.25 : 0.15;
     if (this.phase === 'flying' && this.live) mood = 0.45 + 0.55 * clamp(1 - (distT - t.r) / 500, 0, 1);
     if (this.phase === 'won') mood = this.winTimer < 3 ? 1 : 0.4;
@@ -781,6 +786,26 @@ export class Game {
     this.cam.x += (goal.x - this.cam.x) * k;
     this.cam.y += (goal.y - this.cam.y) * k;
     this.cam.zoom += (goal.zoom - this.cam.zoom) * k;
+  }
+
+  /** Parking-sensor beeps: faster and higher as the probe closes in on the beacon. Real time, so slow-mo doesn't drag them out. */
+  private updateBeeps(dt: number, distT: number) {
+    this.targetPing = Math.max(0, this.targetPing - dt * 5);
+    const t = this.level.target;
+    const p = this.probe;
+    const range = Math.max(320, t.r * 9);
+    const approaching = (t.x - p.x) * p.vx + (t.y - p.y) * p.vy > 0;
+    if (this.phase !== 'flying' || !this.live || distT > range || !approaching) {
+      this.beepTimer = 0;
+      return;
+    }
+    const close = 1 - clamp((distT - t.r) / (range - t.r), 0, 1);
+    this.beepTimer -= dt;
+    if (this.beepTimer <= 0) {
+      sfx.beep(close);
+      this.targetPing = 1;
+      this.beepTimer = 0.42 - 0.34 * close;
+    }
   }
 
   private wormholeNear(p: Vec): { w: Wormhole; index: number } | null {
@@ -1039,6 +1064,14 @@ export class Game {
     c.beginPath();
     c.arc(x, y, r * (won ? 4 : 2.6), 0, Math.PI * 2);
     c.fill();
+
+    if (this.targetPing > 0) {
+      c.strokeStyle = `hsla(165, 100%, 80%, ${this.targetPing * 0.9})`;
+      c.lineWidth = 3;
+      c.beginPath();
+      c.arc(x, y, r * (1.05 + (1 - this.targetPing) * 0.5), 0, Math.PI * 2);
+      c.stroke();
+    }
 
     for (let k = 0; k < 3; k++) {
       const ph = (t * 0.6 + k / 3) % 1;
